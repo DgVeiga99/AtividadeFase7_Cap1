@@ -105,7 +105,6 @@ A integração utiliza:
 ├── README.md                   # Documentação completa do sistema
 ├── best.pt                     # Modelo YOLOv5 treinado para visão computacional
 ├── AtividadeFase7.ipynb        # Notebook de treinamento do modelo YOLOv5
-├── data/                       # Pasta opcional para armazenar relatórios e imagens de entrada
 ```
 
 ---
@@ -145,6 +144,4 @@ Um vídeo de até 10 minutos foi gravado demonstrando todas as funcionalidades i
 - Visão Computacional com uso do YOLOv5
 
 🔗 **Acesse o vídeo no YouTube pelo link:** _[inserir link aqui]_
-
-> Caso não queira tornar o vídeo público, configure-o como **“Não listado”** no YouTube.
 
