@@ -53,7 +53,7 @@ python -m venv .venv
 source .venv/bin/activate
 
 # Instalação das bibliotecas essenciais
-pip install streamlit pandas numpy oracledb boto3 torch torchvision matplotlib
+pip install oracledb pandas numpy streamlit torch opencv-python seaborn
 ```
 
 > O modelo YOLOv5 é carregado com `torch.hub` e requer conexão com a internet no primeiro uso.
@@ -143,5 +143,5 @@ Um vídeo de até 10 minutos foi gravado demonstrando todas as funcionalidades i
 - Integração com o banco de dados
 - Visão Computacional com uso do YOLOv5
 
-🔗 **Acesse o vídeo no YouTube pelo link:** _[inserir link aqui]_
+🔗 **Acesse o vídeo no YouTube pelo link:** https://youtu.be/geW1g1LxzsI
 
