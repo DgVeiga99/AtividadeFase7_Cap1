@@ -34,12 +34,21 @@
 
 # Importação das bibliotecas
 import os
+import io
 import oracledb
 import pandas as pd
 import numpy as np
 import streamlit as st
 from streamlit import progress
 import time
+import torch
+import tempfile
+import pathlib
+
+#Usuário para acessar o banco de dados
+user = "RM560658"
+password = "010199"
+server = 'oracle.fiap.com.br:1521/ORCL'
 
 
 # Lista de dados da laranja
@@ -47,9 +56,12 @@ padraolaranja = [["Adubo Nitrogenado","Fósforo","Potássio","Boro","Zinco","Fun
              [150, 50, 100, 1.5, 4, 250],
              ["kg","kg","kg","kg","kg","mL"]]
 
+# Variáveis do processo
+padrãorelatorio = (98.0, 90.0, 85.0, 10.0, 0.5, 500)
+
 # Submenu de apresentação do titulo e descrição de função da página
 submenu = [["📊 Visão Geral do Projeto","🌱 Estimativa do Consumo de Insumos","🗃️ Banco de Sementes",
-            "💧 IoT e Irrigação Inteligente","📈 Relatórios","☁️ Integração com AWS","🛰️ Fase 6 - Visão Computacional"],
+            "💧 IoT e Irrigação Inteligente","🛰️ Visão Computacional"],
            ["""
         Bem-vindo ao **Sistema Integrado de Gestão para o Agronegócio - Fase 7**.
     
@@ -73,12 +85,14 @@ submenu = [["📊 Visão Geral do Projeto","🌱 Estimativa do Consumo de Insumo
         ###  Objetivo Final
         Oferecer uma plataforma unificada e escalável que possa ser adaptada para qualquer setor produtivo, com foco em **automação, análise de dados e tomada de decisão inteligente** no agronegócio.
         """,
-            "Cálculo estimado dos insumos necessários para a produção de laranja conforme metragem informada.",
-            "Visualização e conexão com o banco de dados relacional da Fase 2.",
-            "Monitoramento e controle dos sensores e bombas via ESP32 (simulado).",
-            "Gráficos, análises estatísticas e Machine Learning com Streamlit.",
-            "Segurança de dados, envio de alertas e arquitetura em nuvem AWS.",
-            "Detecção de pragas e monitoramento visual da lavoura."]
+            "Realize o cálculo automatizado dos insumos agrícolas necessários para o cultivo de laranjas com base na área plantada. A ferramenta utiliza fórmulas "
+            "pré-definidas para estimar a quantidade ideal de adubos e defensivos, oferecendo precisão no planejamento agrícola.",
+            "Gerencie de forma integrada os lotes de sementes armazenadas, com funcionalidades para cadastrar, consultar, atualizar, excluir e gerar relatórios completos. A base de dados é "
+            "conectada a um banco Oracle e permite avaliação da qualidade com base em critérios técnicos.",
+            "Monitore os principais parâmetros do solo (umidade, pH, nutrientes) e controle o acionamento da bomba de irrigação de forma automatizada via ESP32. O sistema registra os dados coletados "
+            "em tempo real, proporcionando uma visão atualizada do estado da plantação.",
+            "Realize inspeções visuais automatizadas na lavoura com apoio de redes neurais YOLOv5. O sistema permite o upload de imagens e detecta automaticamente pragas, doenças ou condições indesejadas"
+            " nas laranjas, exibindo alertas em caso de não conformidades."]
            ]
 
 
@@ -92,8 +106,7 @@ def MenuLateral():
 
     with st.sidebar:
         st.title("MENU LATERAL")
-
-        menu =["Visão Geral","Insumos","Banco de Dados","Automação IoT","Relatórios","AWS","Machine Learning"]
+        menu =["Visão Geral","Insumos","Banco de Sementes","Automação IoT","Visão Computacional"]
 
         if "fase_selecionada" not in st.session_state:
             st.session_state.fase_selecionada = menu[0]
@@ -115,6 +128,22 @@ def EstiloBotao() -> None:
         }
         </style>
     """, unsafe_allow_html=True)
+
+
+# Realiza conexão com o servidor do banco de dados
+def ConexaoServidor(user, password, server) -> bool:
+    global conn,bd_comando
+
+    try:
+        conn = oracledb.connect(user=user, password=password, dsn=server)
+        bd_comando = conn.cursor()
+
+    except Exception:
+        conexao = False
+    else:
+        conexao = True
+
+    return conexao
 
 
 # Apresentação do Submenu
@@ -152,7 +181,7 @@ def ConsumoInsumo(raio:int) -> None:
 
 # Gerenciamento da seleção do menu do banco de dados
 def MenuSementes():
-    menu = ["Inserir lote", "Atualizar lote", "Excluir lote", "Exibir registros", "Excluir registros"]
+    menu = ["Inserir lote", "Atualizar lote", "Excluir lote", "Exibir registros", "Excluir registros","Relatório"]
     cols = st.columns(len(menu))
 
     if "cmd_selecionado" not in st.session_state:
@@ -211,7 +240,7 @@ def ProcuraLoteSemente() -> None:
             BarraProgresso()
 
             if not data:
-                st.error(" Nenhum registro encontrado!")
+                st.warning(" Nenhum registro encontrado!")
                 st.session_state.lote_encontrado = None
             else:
                 st.session_state.lote_encontrado = str(cmd)
@@ -256,15 +285,227 @@ def AtualizaLoteSemente(lote: str) -> None:
         st.exception(e)
 
 
+# Comando para excluir lote
+def ExcluiDadoSemente(lote: str) -> None:
+    try:
+        # Confirma o processo escolhido
+        if st.button("EXCLUIR LOTE"):
+
+            bd_comando.execute(f"DELETE FROM sementes WHERE id ='{lote}'")
+            conn.commit()
+            BarraProgresso()
+            st.success("O registro foi apagado")
+
+    except Exception as e:
+        st.error("Erro de transferência de dados")
+        st.exception(e)
+
+
+# Apresenta lista de todos os lotes registrados
+def ListaCompletaSemente() -> None:
+    lista = []
+    bd_comando.execute('SELECT * FROM sementes')
+    tabela = bd_comando.fetchall()
+
+    for dt in tabela:
+        lista.append(dt)
+
+    # ordena a lista
+    lista = sorted(lista)
+
+    # Formatação para apresentar todas a tabela sem exceção
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.expand_frame_repr', False)
+    pd.set_option('display.max_rows', None)
+
+    # Gera um DataFrame com os dados da lista utilizando o Pandas
+    DadosFormatados = pd.DataFrame.from_records(lista, columns=["ID","Lote","Data de colheita","Pureza(%)","Germinação(%)","Viabilidade(%)","Umidade(%)","Sanidade(%)","Pesos(g)"], index='ID')
+
+    if DadosFormatados.empty:
+        st.warning("Nenhum registro encontrado!\n")
+    else:
+        st.dataframe(DadosFormatados)
+
+
+# Exclui todos os registros existentes no banco de dados
+def ExcluiCompletoSemente() -> None:
+    st.write("!!!!! O COMANDO IRA EXCLUIR SEU BANCO DE DADOS POR COMPLETO !!!!!")
+    st.write("Confirma a exclusão?")
+
+    # Comando de exclusão de todos os registros existentes
+    if st.button("SIM"):
+        bd_comando.execute("DELETE FROM sementes")
+        conn.commit()
+        bd_comando.execute(" ALTER TABLE sementes MODIFY(ID GENERATED AS IDENTITY (START WITH 1)) ")
+        conn.commit()
+
+        BarraProgresso()
+        st.success("\nTodos os registros foram excluídos!\n")
+
+
+# Cálculo de aprovação e reprovação do lote
+def CalculoAprovaSemente(lista: list,ref: tuple) -> None:
+    resultado = []
+
+    # Realiza comparação dos valores no banco com os padrões
+    for i in range(3, len(lista)):
+        index = i - 3
+        aprova = False
+
+        match i:
+            case 3|4|5:
+                aprova = lista[i] >= ref[index]
+
+            case 6|7:
+                aprova = lista[i] <= ref[index]
+
+            case 8:
+                zonamax = ref[index] * 1.05
+                zonamin = ref[index] * 0.95
+                aprova = zonamin <= lista[i] <= zonamax
+
+        resultado.append("Aprovado" if aprova else "Reprovado")
+
+    return resultado
+
+
+# Cria o relatório em TXT
+def RelatorioTXTSemente(lote: str, dados: list, result: list, ref: tuple) -> None:
+
+    #Construção do relatorio do lote
+    conteudo = (
+        f"{'=' * 20} RELATÓRIO DE QUALIDADE {'=' * 20}\n"
+        "Relatório de qualidade das sementes obtemos os valores que estão aprovado e reprovados conforme padrão\n"
+        "VALORES PADRÕES:\n"
+        f"\t1. Pureza: acima de {ref[0]} %\n"
+        f"\t2. Taxa de Germinação: acima de {ref[1]} %\n"
+        f"\t3. Viabilidade: acima de {ref[2]} %\n"
+        f"\t4. Teor de Umidade: menor ou igual a {ref[3]} %\n"
+        f"\t5. Sanidade: menor ou igual a {ref[4]} %\n"
+        f"\t6. Peso Mil sementes: padrão {ref[5]} (g) com tolerância de +/-5%\n"
+        f"{'-' * 60}\n\n"
+        f"ID...............: {dados[0]} (Número banco de dados)\n"
+        f"LOTE.............: {dados[1]}\n"
+        f"DATA COLHEITA....: {dados[2]}\n"
+        f"\t1. Pureza: {dados[3]} %                  -> {result[0]} conforme padrão\n"
+        f"\t2. Taxa de Germinação: {dados[4]} %      -> {result[1]} conforme padrão\n"
+        f"\t3. Viabilidade: {dados[5]} %             -> {result[2]} conforme padrão\n"
+        f"\t4. Teor de Umidade: {dados[6]} %         -> {result[3]} conforme padrão\n"
+        f"\t5. Sanidade: {dados[7]} %                -> {result[4]} conforme padrão\n"
+        f"\t6. Peso Mil sementes: {dados[8]} g       -> {result[5]} conforme padrão\n"
+    )
+
+    st.success("Relatório gerado com sucesso e pronto para download")
+
+    # Comando para realizar o download do código
+    buffer = io.BytesIO(conteudo.encode("utf-8"))
+    st.download_button(
+        label="📥 Baixar relatório",
+        data=buffer,
+        file_name=f"RelatorioLote{lote}.txt",
+        mime="text/plain"
+    )
+
+
+# Rotina para geração do relatório de lote
+def GeraRelatorioSemente(lote: str,ref: tuple) -> None:
+    lista = []
+    bd_comando.execute(f"SELECT * FROM sementes WHERE lote = '{lote}'")
+    tabela = bd_comando.fetchall()
+
+    for dt in tabela:
+        lista.append(dt)
+
+    # Converte os dados obtidos de lista + tupla para lista
+    lista = sorted(lista)
+    dados = list(lista[0])
+
+    # Chamada do cálculo para comparar os itens aprovados
+    result = CalculoAprovaSemente(dados,ref)
+
+    #Chamada para realizar o relatorio txt
+    RelatorioTXTSemente(lote,dados,result,padrãorelatorio)
+
+
+# Apresenta lista de todos os lotes registrados
+def ListaCompletaPlantacao() -> None:
+    lista = []
+    bd_comando.execute('SELECT * FROM plantacao')
+    tabela = bd_comando.fetchall()
+
+    for dt in tabela:
+        lista.append(dt)
+
+    # ordena a lista
+    lista = sorted(lista)
+
+    # Formatação para apresentar todas a tabela sem exceção
+    pd.set_option('display.max_columns', None)
+    pd.set_option('display.expand_frame_repr', False)
+    pd.set_option('display.max_rows', None)
+
+    # Gera um DataFrame com os dados da lista utilizando o Pandas
+    DadosFormatados = pd.DataFrame.from_records(lista, columns=["ID","Data registro","Fósforo","Potássio","Umidade(%)","pH Solo","Bomba água"], index='ID')
+
+    if DadosFormatados.empty:
+        st.warning("Nenhum registro encontrado!\n")
+    else:
+        st.dataframe(DadosFormatados)
+
+
+# Chama modelo treinado do Yolov5
+def ModeloYolo(imagem):
+
+    # Corrige incompatibilidade com PosixPath no Windows (sugerido pelo ChatGPT)
+    pathlib.PosixPath = pathlib.WindowsPath
+
+    model = torch.hub.load("ultralytics/yolov5", 'custom', path='best.pt', force_reload=True)
+    result = model(imagem)
+    return result
+
+
+# Apresenta resultado da Visão Computacional
+def ResultadoVisao(results):
+
+    c1,c2 = st.columns(2)
+
+    with c1:
+        st.image(results.render()[0],use_container_width=True)
+
+    with c2:
+        st.markdown("### Classes detectadas:")
+        df = results.pandas().xyxy[0][['name', 'confidence']]
+        df.columns = ['Classe', 'Confiança']
+        st.dataframe(df, use_container_width=True)
+
+
+# Realiza o teste da visão computacional do
+def VisaoComputacional() -> None:
+    # Interface de upload
+    arquivo = st.file_uploader("📸 Faça o upload de uma imagem da lavoura (laranja)",
+                                     type=["jpg", "png", "jpeg"])
+
+    # Carregamento da imagem para teste de visão
+    if arquivo is not None:
+        with tempfile.NamedTemporaryFile(delete=False) as temp_file:
+            temp_file.write(arquivo.read())
+            temp_image_path = temp_file.name
+        st.success("Imagem carregada com sucesso.")
+
+
+        if st.button("ANALISAR IMAGEM"):
+            with st.spinner("Visão Computacional em processamento..."):
+                resultado = ModeloYolo(temp_image_path)
+                ResultadoVisao(resultado)
+
+
+
+
+#-------------------------------------------------------------------------------------------------------
+
 #============================================================================================================
 #                                          PROGRAMA PRINCIPAL
 #============================================================================================================
-
-#Usuário para acessar o banco de dados
-user = "RM560658"
-password = "010199"
-server = 'oracle.fiap.com.br:1521/ORCL'
-#----------------------------------------------------------------------------------------------------------
 
 # Título da dashboard
 st.set_page_config(page_title="Sistema Agronegócio - Fase 7", layout="wide")
@@ -272,16 +513,8 @@ st.set_page_config(page_title="Sistema Agronegócio - Fase 7", layout="wide")
 # Aplica estilo aos botões
 EstiloBotao()
 
-# Realiza conexão com o servidor do banco de dados
-try:
-    conn = oracledb.connect(user=user, password=password, dsn=server)
-    bd_comando = conn.cursor()
-
-except Exception:
-    conexao = False
-else:
-    conexao = True
-
+#Conexão com o servidor
+conexao = ConexaoServidor(user,password,server)
 
 # Controle do Menu lateral com botões
 fase = MenuLateral()
@@ -309,7 +542,7 @@ match fase:
 
 
     # ================================ Banco de dados ========================================
-    case "Banco de Dados":
+    case "Banco de Sementes":
         # Apresentação da seleção da página
         SubMenu(submenu[0][2], submenu[1][2])
 
@@ -322,9 +555,7 @@ match fase:
 
                 # ------------------------------- Inserir lote ------------------------------------
                 case "Inserir lote":
-                    st.session_state.lote_encontrado = None
                     NovoLoteSemente()
-
 
                 # ------------------------------- Atualizar lote ----------------------------------
                 case "Atualizar lote":
@@ -334,18 +565,23 @@ match fase:
 
                 # ------------------------------- Excluir lote ------------------------------------
                 case "Excluir lote":
-                    NovoLoteSemente()
+                    ProcuraLoteSemente()
+                    if st.session_state.get("lote_encontrado"):
+                        ExcluiDadoSemente(st.session_state.lote_encontrado)
 
                 # ----------------------------- Exibir registros ----------------------------------
                 case "Exibir registros":
-                    st.session_state.lote_encontrado = None
-                    NovoLoteSemente()
+                    ListaCompletaSemente()
 
                 # ----------------------------- Excluir registros ---------------------------------
                 case "Excluir registros":
-                    st.session_state.lote_encontrado = None
-                    NovoLoteSemente()
+                    ExcluiCompletoSemente()
 
+                # ----------------------------- Relatório ---------------------------------
+                case "Relatório":
+                    ProcuraLoteSemente()
+                    if st.session_state.get("lote_encontrado"):
+                        GeraRelatorioSemente(st.session_state.lote_encontrado,padrãorelatorio)
 
         # Falha na conexão do banco de dados
         else:
@@ -356,23 +592,21 @@ match fase:
     case "Automação IoT":
         # Apresentação da seleção da página
         SubMenu(submenu[0][3], submenu[1][3])
-
-    # ================================ Dashboard ========================================
-    case "Relatórios":
-        # Apresentação da seleção da página
-        SubMenu(submenu[0][4], submenu[1][4])
-
-    # ================================ AWS ========================================
-    case "AWS":
-        # Apresentação da seleção da página
-        SubMenu(submenu[0][5], submenu[1][5])
+        ListaCompletaPlantacao()
 
     # ================================ Inserir lote ========================================
-    case "Machine Learning":
+    case "Visão Computacional":
         # Apresentação da seleção da página
-        SubMenu(submenu[0][6], submenu[1][6])
+        SubMenu(submenu[0][4], submenu[1][4])
+        VisaoComputacional()
 
 
 # Finalização da página
 st.divider()
 st.caption("Desenvolvido por Diego Veiga - Projeto FIAP Fase 7")
+
+
+
+
+
+
